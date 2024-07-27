@@ -45,6 +45,7 @@ from czsc.traders import (
     ExitsOptimize,
 )
 from czsc.utils import (
+    mac_address,
     overlap,
 
     format_standard_kline,
@@ -105,6 +106,10 @@ from czsc.utils import (
 
     optuna_study,
     optuna_good_params,
+
+    generate_fernet_key,
+    fernet_encrypt,
+    fernet_decrypt,
 )
 
 # 交易日历工具
@@ -113,6 +118,10 @@ from czsc.utils.calendar import (
     next_trading_date,
     prev_trading_date,
     get_trading_dates,
+)
+
+from czsc.utils.trade import (
+    adjust_holding_weights,
 )
 
 # streamlit 量化分析组件
@@ -140,6 +149,9 @@ from czsc.utils.st_components import (
     show_strategies_symbol,
     show_strategies_dailys,
     show_holds_backtest,
+    show_symbols_corr,
+    show_feature_returns,
+    show_czsc_trader,
 )
 
 from czsc.utils.bi_info import (
@@ -166,6 +178,9 @@ from czsc.features.utils import (
     rolling_tanh,
     feature_adjust,
     normalize_corr,
+    feature_to_weight,
+    feature_returns,
+    feature_sectional_corr,
 )
 
 
@@ -177,10 +192,10 @@ from czsc.utils.kline_quality import (
 )
 
 
-__version__ = "0.9.51"
+__version__ = "0.9.56"
 __author__ = "zengbin93"
 __email__ = "zeng_bin8888@163.com"
-__date__ = "20240512"
+__date__ = "20240714"
 
 
 def welcome():
@@ -191,7 +206,6 @@ def welcome():
         f"CZSC环境变量："
         f"czsc_min_bi_len = {envs.get_min_bi_len()}; "
         f"czsc_max_bi_num = {envs.get_max_bi_num()}; "
-        f"czsc_bi_change_th = {envs.get_bi_change_th()}"
     )
 
 

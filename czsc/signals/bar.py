@@ -10,6 +10,7 @@ import numpy as np
 from datetime import datetime
 from typing import List
 from loguru import logger
+from copy import deepcopy
 from deprecated import deprecated
 from collections import OrderedDict
 from czsc import envs, CZSC, Signal
@@ -558,6 +559,7 @@ def bar_accelerate_V240428(c: CZSC, **kwargs) -> OrderedDict:
     **信号逻辑：**
 
     以上涨加速为例，计算过程如下：
+
     1. 给定窗口大小 w，rolling 计算 w 个周期的 diff 绝对值；
     2. 如果当前 diff 绝对值大于 最近300个周期的 diff 绝对值的 75% 分位数，且当前 diff 大于 0，判定为上涨加速；
     3. 窗口内至少要有 T 根倍量上涨的 K 线。
@@ -568,11 +570,17 @@ def bar_accelerate_V240428(c: CZSC, **kwargs) -> OrderedDict:
     - Signal('日线_D1W21T2_加速V240428_下跌_任意_任意_0')
 
     :param c: CZSC对象
+    :param kwargs:
+
+        - di: 区间结束K线位置，倒数
+        - w: 窗口大小
+        - t: 倍量上涨的K线数量
+
     :return: 信号识别结果
     """
     di = int(kwargs.get("di", 1))
     w = int(kwargs.get("w", 21))
-    t = int(kwargs.get("t", 2))
+    t = int(kwargs.get("t", 1))
     freq = c.freq.value
 
     # rolling 计算 w 个周期的 diff
@@ -1957,3 +1965,304 @@ def bar_break_V240428(c: CZSC, **kwargs) -> OrderedDict:
         v1 = "收盘新低"
 
     return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+
+def bar_classify_V240606(c: CZSC, **kwargs) -> OrderedDict:
+    """单根K线收盘位置分类
+
+    飞书文档：https://s0cqcxuy3p.feishu.cn/wiki/P79fwVE19i7vw4keDuac4tFRnMf
+
+    参数模板："{freq}_D{di}收盘位置_分类V240606"
+
+    **信号逻辑：**
+
+    1. 高收盘蜡烛是指收盘价在蜡烛范围的上三分之一内的蜡烛。
+    2. 中间收盘价是指收盘价在蜡烛范围的中间三分之一以内。
+    3. 中间收盘价是指收盘价在蜡烛范围的中间三分之一以内。
+
+    **信号列表：**
+
+    - Signal('60分钟_D1收盘位置_分类V240606_低位_任意_任意_0')
+    - Signal('60分钟_D1收盘位置_分类V240606_中间_任意_任意_0')
+    - Signal('60分钟_D1收盘位置_分类V240606_高位_任意_任意_0')
+
+    :param c: CZSC对象
+    :param kwargs:
+
+        - di: int, default 1, 周期偏移量
+
+    :return: 信号识别结果
+    """
+    di = int(kwargs.get("di", 1))
+    assert di > 0, "参数 di 必须大于 0"
+
+    freq = c.freq.value
+    k1, k2, k3 = f"{freq}_D{di}收盘位置_分类V240606".split("_")
+    v1 = "其他"
+    if len(c.bars_raw) < 7 + di:
+        return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+    bar = c.bars_raw[-di]
+    close, high, low = bar.close, bar.high, bar.low
+    gap_unit = (high - low) / 3
+    if close > (high - gap_unit):
+        v1 = "高位"
+    elif close < (low + gap_unit):
+        v1 = "低位"
+    else:
+        v1 = "中间"
+
+    return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+
+def bar_classify_V240607(c: CZSC, **kwargs) -> OrderedDict:
+    """两根K线收盘位置分类
+
+    飞书文档：https://s0cqcxuy3p.feishu.cn/wiki/PNY8wB59xicCtVkTacvcrcQgnOh
+
+    参数模板："{freq}_D{di}K2收盘位置_分类V240607"
+
+    **信号逻辑：**
+
+    1. 看多：第二根K线收盘价在第一根K线的最高价上方
+    2. 看空：第二根K线收盘价在第一根K线的最低价下方
+    3. 中性：其他情况
+
+    **信号列表：**
+
+    - Signal('60分钟_D1K2收盘位置_分类V240607_看空_任意_任意_0')
+    - Signal('60分钟_D1K2收盘位置_分类V240607_中性_任意_任意_0')
+    - Signal('60分钟_D1K2收盘位置_分类V240607_看多_任意_任意_0')
+
+    :param c: CZSC对象
+    :param kwargs:
+
+        - di: int, default 1, 周期偏移量
+
+    :return: 信号识别结果
+    """
+    di = int(kwargs.get("di", 1))
+    assert di > 0, "参数 di 必须大于 0"
+
+    freq = c.freq.value
+    k1, k2, k3 = f"{freq}_D{di}K2收盘位置_分类V240607".split("_")
+    v1 = "其他"
+    if len(c.bars_raw) < 7 + di:
+        return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+    bar1, bar2 = get_sub_elements(c.bars_raw, di=di, n=2)
+    h, l, c = bar1.high, bar1.low, bar2.close
+    if c > h:
+        v1 = "看多"
+    elif c < l:
+        v1 = "看空"
+    else:
+        v1 = "中性"
+
+    return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+
+def bar_decision_V240608(c: CZSC, **kwargs) -> OrderedDict:
+    """W窗口内最近N根K线放量后进行决策，如果是多头放量，开空，如果是空头放量，开多
+
+    参数模板："{freq}_W{w}N{n}Q{q}放量_决策区域V240608"
+
+    **信号逻辑：**
+
+    1. 看多：第二根K线收盘价在第一根K线的最高价上方
+    2. 看空：第二根K线收盘价在第一根K线的最低价下方
+    3. 中性：其他情况
+
+    **信号列表：**
+
+    - Signal('60分钟_W300N20Q70放量_决策区域V240608_看空_任意_任意_0')
+    - Signal('60分钟_W300N20Q70放量_决策区域V240608_放量_任意_任意_0')
+    - Signal('60分钟_W300N20Q70放量_决策区域V240608_看多_任意_任意_0')
+
+    :param c: CZSC对象
+    :param kwargs:
+
+        - w: int, default 300, 窗口大小
+        - n: int, default 20, 最近N根K线
+        - q: int, default 80, 分位数，取值范围 0-100，表示取最近 w 根K线的成交量的 q 分位数
+
+    :return: 信号识别结果
+    """
+    w = int(kwargs.get("w", 300))
+    n = int(kwargs.get("n", 10))
+    q = int(kwargs.get("q", 80))  # 分位数，取值范围 0-100，表示取最近 w 根K线的成交量的 q 分位数
+    assert w > n > 3, "参数 w 必须大于 n，且 n 必须大于 0"
+
+    freq = c.freq.value
+    k1, k2, k3 = f"{freq}_W{w}N{n}Q{q}放量_决策区域V240608".split("_")
+    v1 = "其他"
+    if len(c.bars_raw) < w + n:
+        return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+    w_bars = get_sub_elements(c.bars_raw, di=1, n=w)
+    n_bars = get_sub_elements(c.bars_raw, di=1, n=n)
+    n_bars = deepcopy(n_bars)
+    n_diff = n_bars[-1].close - n_bars[0].open
+
+    # 找出 n_bars 中成交量最大的3根K线
+    n_bars.sort(key=lambda x: x.vol, reverse=True)
+    n_bars = n_bars[:3]
+
+    # 计算 w_bars 中成交量的 q 分位数
+    qth = np.quantile([x.vol for x in w_bars], q / 100)
+    vol_match = all([x.vol > qth for x in n_bars])
+    if vol_match and n_diff > 0:
+        v1 = "看空"
+    if vol_match and n_diff < 0:
+        v1 = "看多"
+    return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+
+def bar_decision_V240616(c: CZSC, **kwargs) -> OrderedDict:
+    """新高/低后的弱/强势信号
+
+    参数模板："{freq}_W{w}N{n}强弱_决策区域V240616"
+
+    **信号逻辑：**
+
+    1. 看多：最近 N 根K线出现新高，且后续出现低位收盘的弱势信号
+    2. 看空：最近 N 根K线出现新低，且后续出现高位收盘的强势信号
+
+    https://s0cqcxuy3p.feishu.cn/wiki/MT47wiaalilwnnkAGo5c04Sxnfd
+
+    **信号列表：**
+
+    - Signal('60分钟_W100N5强弱_决策区域V240616_看多_任意_任意_0')
+    - Signal('60分钟_W100N5强弱_决策区域V240616_看空_任意_任意_0')
+
+    :param c: CZSC对象
+    :param kwargs:
+
+        - w: int, default 300, 窗口大小
+        - n: int, default 20, 最近N根K线
+
+    :return: 信号识别结果
+    """
+    w = int(kwargs.get("w", 100))
+    n = int(kwargs.get("n", 5))
+    assert w > n > 2, "参数 w 必须大于 n，且 n 必须大于 0"
+
+    freq = c.freq.value
+    k1, k2, k3 = f"{freq}_W{w}N{n}强弱_决策区域V240616".split("_")
+    v1 = "其他"
+
+    # 更新K线收盘位置信息
+    cache_key = "bar_decision_V240616_close_position"
+    for bar in c.bars_raw:
+        if not hasattr(bar.cache, cache_key):
+            hl = bar.high - bar.low
+            t1 = bar.low + hl * (2 / 3)
+            t2 = bar.low + hl * (1 / 3)
+            if bar.close > t1:
+                bar.cache[cache_key] = "高位收盘"
+            elif t2 < bar.close < t1:
+                bar.cache[cache_key] = "中位收盘"
+            else:
+                bar.cache[cache_key] = "低位收盘"
+
+    if len(c.bars_raw) < w + n + 10:
+        return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+    w_bars = get_sub_elements(c.bars_raw, di=n, n=w)
+    w_bars_high = max([x.high for x in w_bars])
+    w_bars_low = min([x.low for x in w_bars])
+
+    # K线平均长度
+    hl_mean = np.mean([x.high - x.low for x in w_bars])
+    n_bars = [x for x in get_sub_elements(c.bars_raw, di=1, n=n) if x.high - x.low > hl_mean]
+
+    # 寻找 n_bars 中的新高K线，及其后面的K线序列
+    for i, bar in enumerate(n_bars):
+        right_bars = n_bars[i + 1 :]
+        if not right_bars:
+            return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+        # 当前K线创新高，但是收盘价在HL中点以下
+        if bar.high >= w_bars_high and bar.cache[cache_key] != "高位收盘":
+            for rb in right_bars:
+                if rb.cache[cache_key] == "低位收盘" or rb.close < rb.low:
+                    v1 = "看空"
+                    break
+
+        # 当前K线创新低，但是收盘价在HL中点以上
+        if bar.low <= w_bars_low and bar.cache[cache_key] != "低位收盘":
+            for rb in right_bars:
+                if rb.cache[cache_key] == "高位收盘" or rb.close > rb.high:
+                    v1 = "看多"
+                    break
+
+    return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+
+def bar_td9_V240616(c: CZSC, **kwargs) -> OrderedDict:
+    """神奇九转计数
+
+    参数模板："{freq}_神奇九转N{n}_BS辅助V240616"
+
+    **信号逻辑：**
+
+    1. 当前收盘价大于前4根K线的收盘价，+1，否则-1
+    2. 如果最后一根K线为1，且连续值计数大于等于N，卖点；如果最后一根K线为-1，且连续值计数小于等于-N，买点
+
+    **信号列表：**
+
+    - Signal('60分钟_神奇九转N9_BS辅助V240616_买点_9转_任意_0')
+    - Signal('60分钟_神奇九转N9_BS辅助V240616_卖点_9转_任意_0')
+
+    :param c: CZSC对象
+    :param kwargs:
+
+        - n: int, default 9, 连续转折次数
+
+    :return: 信号识别结果
+    """
+    n = int(kwargs.get("n", 9))
+
+    freq = c.freq.value
+    k1, k2, k3 = f"{freq}_神奇九转N{n}_BS辅助V240616".split("_")
+    v1 = "其他"
+
+    # 更新缓存
+    cache_key = "bar_td9_V240616"
+    for i, bar in enumerate(c.bars_raw):
+        if i < 4 or hasattr(bar.cache, cache_key):
+            continue
+
+        if bar.close > c.bars_raw[i - 4].close:
+            bar.cache[cache_key] = 1
+        elif bar.close < c.bars_raw[i - 4].close:
+            bar.cache[cache_key] = -1
+        else:
+            bar.cache[cache_key] = 0
+
+    if len(c.bars_raw) < 30 + n:
+        return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1)
+
+    v2 = "任意"
+    bars = get_sub_elements(c.bars_raw, di=1, n=n * 2)
+    if bars[-1].cache[cache_key] == 1:
+        count = 0
+        for bar in bars[::-1]:
+            if bar.cache[cache_key] != 1:
+                break
+            count += 1
+        if count >= n:
+            v1 = "卖点"
+            v2 = f"{count}转"
+
+    elif bars[-1].cache[cache_key] == -1:
+        count = 0
+        for bar in bars[::-1]:
+            if bar.cache[cache_key] != -1:
+                break
+            count += 1
+        if count >= n:
+            v1 = "买点"
+            v2 = f"{count}转"
+
+    return create_single_signal(k1=k1, k2=k2, k3=k3, v1=v1, v2=v2)

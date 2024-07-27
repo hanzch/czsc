@@ -7,6 +7,7 @@ import streamlit as st
 import plotly.express as px
 import statsmodels.api as sm
 import plotly.graph_objects as go
+from deprecated import deprecated
 from sklearn.linear_model import LinearRegression
 
 
@@ -113,7 +114,7 @@ def show_monthly_return(df, ret_col="total", sub_title="月度累计收益", **k
 
     :param df: pd.DataFrame，数据源
     :param ret_col: str，收益列名
-    :param title: str，标题
+    :param sub_title: str，标题
     :param kwargs:
     """
     assert isinstance(df, pd.DataFrame), "df 必须是 pd.DataFrame 类型"
@@ -136,11 +137,21 @@ def show_monthly_return(df, ret_col="total", sub_title="月度累计收益", **k
     monthly.columns = month_cols
     monthly["年收益"] = monthly.sum(axis=1)
 
+    # 计算月度胜率和月度盈亏比
+    win_rate = monthly.apply(lambda x: (x > 0).sum() / len(x), axis=0)
+    ykb = monthly.apply(lambda x: x[x > 0].sum() / -x[x < 0].sum() if min(x) < 0 else 10, axis=0)
+    mean_ret = monthly.mean(axis=0)
+    dfy = pd.DataFrame([win_rate, ykb, mean_ret], index=["胜率", "盈亏比", "平均收益"])
+
     monthly = monthly.style.background_gradient(cmap="RdYlGn_r", axis=None, subset=month_cols)
     monthly = monthly.background_gradient(cmap="RdYlGn_r", axis=None, subset=["年收益"])
     monthly = monthly.format("{:.2%}", na_rep="-")
-
     st.dataframe(monthly, use_container_width=True)
+    dfy = dfy.style.background_gradient(cmap="RdYlGn_r", axis=1).format("{:.2%}", na_rep="-")
+    st.dataframe(dfy, use_container_width=True)
+    st.caption(
+        "注：月度收益为累计收益，胜率为月度收益大于0的占比，盈亏比为月度盈利总额与月度亏损总额的比值，如果月度亏损总额为0，则盈亏比为10"
+    )
 
 
 def show_correlation(df, cols=None, method="pearson", **kwargs):
@@ -210,7 +221,7 @@ def show_sectional_ic(df, x_col, y_col, method="pearson", **kwargs):
     if kwargs.get("show_cumsum_ic", True):
         dfc["ic_cumsum"] = dfc["ic"].cumsum()
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=dfc["dt"], y=dfc["ic"], mode="lines", name="IC", yaxis="y"))
+        fig.add_trace(go.Bar(x=dfc["dt"], y=dfc["ic"], name="IC", yaxis="y"))
         fig.add_trace(
             go.Scatter(x=dfc["dt"], y=dfc["ic_cumsum"], mode="lines", name="累计IC", yaxis="y2", line=dict(color="red"))
         )
@@ -223,6 +234,7 @@ def show_sectional_ic(df, x_col, y_col, method="pearson", **kwargs):
         st.plotly_chart(fig, use_container_width=True)
 
 
+@deprecated("请使用 czsc.show_feature_returns")
 def show_factor_returns(df, x_col, y_col):
     """使用 streamlit 展示因子收益率
 
@@ -252,49 +264,68 @@ def show_factor_returns(df, x_col, y_col):
     col2.plotly_chart(fig, use_container_width=True)
 
 
-def show_factor_layering(df, x_col, y_col="n1b", **kwargs):
-    """使用 streamlit 绘制因子截面分层收益率图
+def show_feature_returns(df, factor, target="n1b", **kwargs):
+    """使用 streamlit 展示因子收益率
+
+    :param df: pd.DataFrame, 必须包含 dt、symbol、factor, target 列
+    :param factor: str, 因子列名
+    :param target: str, 预测目标收益率列名
+    :param kwargs:
+
+        - fit_intercept: bool, 是否拟合截距，默认为 False
+        - fig_title: str, 图表标题，默认为 "因子收益率分析"
+
+    """
+    assert "dt" in df.columns, "时间列必须为 dt"
+    assert "symbol" in df.columns, "标的列必须为 symbol"
+    assert factor in df.columns, f"因子列 {factor} 不存在"
+    assert target in df.columns, f"目标列 {target} 不存在"
+
+    fit_intercept = kwargs.get("fit_intercept", False)
+
+    dft = czsc.feature_returns(df, factor, target, fit_intercept=fit_intercept)
+    dft.columns = ["dt", "因子收益率"]
+    dft["累计收益率"] = dft["因子收益率"].cumsum()
+
+    fig_title = kwargs.get("fig_title", "因子截面收益率分析")
+
+    # 将因子逐K收益率 和 因子累计收益率 分左右轴，绘制在一张图上
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=dft["dt"], y=dft["因子收益率"], name="因子收益率", yaxis="y"))
+    fig.add_trace(
+        go.Scatter(
+            x=dft["dt"], y=dft["累计收益率"], mode="lines", name="累计收益率", yaxis="y2", line=dict(color="red")
+        )
+    )
+    fig.update_layout(
+        yaxis=dict(title="因子收益率"),
+        yaxis2=dict(title="累计收益率", overlaying="y", side="right"),
+        title=fig_title,
+        margin=dict(l=0, r=0, b=0),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def show_factor_layering(df, factor, target="n1b", **kwargs):
+    """使用 streamlit 绘制因子分层收益率图
 
     :param df: 因子数据
-    :param x_col: 因子列名
-    :param y_col: 收益列名
+    :param factor: 因子列名
+    :param target: 收益列名
     :param kwargs:
 
         - n: 分层数量，默认为10
-        - long: 多头组合，例如 "第10层"
-        - short: 空头组合，例如 "第01层"
 
     """
     n = kwargs.get("n", 10)
-    if df[y_col].max() > 100:  # 收益率单位为BP, 转换为万分之一
-        df[y_col] = df[y_col] / 10000
+    df = czsc.feture_cross_layering(df, factor, n=n)
 
-    df = czsc.feture_cross_layering(df, x_col, n=n)
+    mr = df.groupby(["dt", f"{factor}分层"])[target].mean().reset_index()
+    mrr = mr.pivot(index="dt", columns=f"{factor}分层", values=target).fillna(0)
+    if "第00层" in mrr.columns:
+        mrr.drop(columns=["第00层"], inplace=True)
 
-    mr = df.groupby(["dt", f"{x_col}分层"])[y_col].mean().reset_index()
-    mrr = mr.pivot(index="dt", columns=f"{x_col}分层", values=y_col).fillna(0)
-
-    tabs = st.tabs(["分层收益率", "多空组合"])
-    with tabs[0]:
-        czsc.show_daily_return(mrr)
-
-    with tabs[1]:
-        layering_cols = mrr.columns.to_list()
-        with st.form(key="factor_form"):
-            col1, col2 = st.columns(2)
-            long = col1.multiselect("多头组合", layering_cols, default=[], key="factor_long")
-            short = col2.multiselect("空头组合", layering_cols, default=[], key="factor_short")
-            submit = st.form_submit_button("多空组合快速测试")
-
-        if not submit:
-            st.warning("请设置多空组合")
-            st.stop()
-
-        dfr = mrr.copy()
-        dfr["多头"] = dfr[long].mean(axis=1)
-        dfr["空头"] = -dfr[short].mean(axis=1)
-        dfr["多空"] = (dfr["多头"] + dfr["空头"]) / 2
-        czsc.show_daily_return(dfr[["多头", "空头", "多空"]])
+    czsc.show_daily_return(mrr, stat_hold_days=False)
 
 
 def show_symbol_factor_layering(df, x_col, y_col="n1b", **kwargs):
@@ -1010,14 +1041,15 @@ def show_event_return(df, factor, **kwargs):
     :param kwargs: dict, 其他参数
 
         - sub_title: str, 子标题
-        - max_overlap: int, 事件最大重叠次数
+        - max_unique: int, 因子独立值最大数量
 
     """
     sub_title = kwargs.get("sub_title", "事件收益率特征")
+    max_unique = kwargs.get("max_unique", 20)
     if sub_title:
         st.subheader(sub_title, divider="rainbow")
 
-    if df[factor].nunique() > 20:
+    if df[factor].nunique() > max_unique:
         st.warning(f"因子分布过于离散，无法进行分析，请检查！！！因子独立值数量：{df[factor].nunique()}")
         return
 
@@ -1026,21 +1058,28 @@ def show_event_return(df, factor, **kwargs):
     c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
     agg_method = c1.selectbox(
         "聚合方法",
-        ["平均收益率", "收益中位数", "最小收益率", "盈亏比", "交易胜率"],
+        [
+            "平均收益率",
+            "收益中位数",
+            "盈亏比",
+            "交易胜率",
+            "前20%平均收益率",
+            "后20%平均收益率",
+        ],
         index=0,
         key=f"agg_method_{factor}",
     )
     sdt = pd.to_datetime(c2.date_input("开始时间", value=df["dt"].min()))
     edt = pd.to_datetime(c3.date_input("结束时间", value=df["dt"].max()))
-    max_overlap = c4.number_input("最大重叠次数", value=5, min_value=1, max_value=20)
+    max_overlap = c4.number_input("最大重叠次数", value=3, min_value=1, max_value=20)
 
     df[factor] = df[factor].astype(str)
     df = czsc.overlap(df, factor, new_col="overlap", max_overlap=max_overlap)
     df = df[(df["dt"] >= sdt) & (df["dt"] <= edt)].copy()
 
-    st.write(
-        f"时间范围：{df['dt'].min().strftime('%Y%m%d')} ~ {df['dt'].max().strftime('%Y%m%d')}；聚合方法：{agg_method}"
-    )
+    sdt = df["dt"].min().strftime("%Y-%m-%d")
+    edt = df["dt"].max().strftime("%Y-%m-%d")
+    st.write(f"时间范围：{sdt} ~ {edt}；聚合方法：{agg_method}")
     nb_cols = [x for x in df.columns.to_list() if x.startswith("n") and x.endswith("b")]
 
     if agg_method == "平均收益率":
@@ -1049,8 +1088,11 @@ def show_event_return(df, factor, **kwargs):
     if agg_method == "收益中位数":
         agg_method = lambda x: np.median(x)
 
-    if agg_method == "最小收益率":
-        agg_method = lambda x: np.min(x)
+    if agg_method == "前20%平均收益率":
+        agg_method = lambda x: np.mean(sorted(x)[int(len(x) * 0.8) :])
+
+    if agg_method == "后20%平均收益率":
+        agg_method = lambda x: np.mean(sorted(x)[: int(len(x) * 0.2)])
 
     if agg_method == "盈亏比":
         agg_method = lambda x: np.mean([y for y in x if y > 0]) / abs(np.mean([y for y in x if y < 0]))
@@ -1304,3 +1346,140 @@ def show_holds_backtest(df, **kwargs):
     if kwargs.get("show_monthly_return", True):
         st.write("月度累计收益")
         czsc.show_monthly_return(daily, ret_col="return", sub_title="")
+
+
+def show_symbols_corr(df, factor, target="n1b", method="pearson", **kwargs):
+    """展示品种相关性分析
+
+    :param df: pd.DataFrame, 数据源，columns=['dt', 'symbol', factor, target]
+    :param factor: str, 因子名称
+    :param target: str, 目标列名称
+    :param method: str, 相关性计算方法，默认为 pearson
+    :param kwargs:
+
+        - fig_title: str, 图表标题
+    """
+    dfc = df.copy().sort_values(["dt", "symbol"]).reset_index(drop=True)
+    dfr = (
+        dfc.groupby("symbol")
+        .apply(lambda x: x[factor].corr(x[target], method=method), include_groups=False)
+        .reset_index()
+    )
+    dfr.columns = ["symbol", "corr"]
+    dfr = dfr.sort_values("corr", ascending=False)
+    fig_title = kwargs.get("fig_title", f"{factor} 在品种上的相关性分布")
+    fig = px.bar(dfr, x="symbol", y="corr", title=fig_title, orientation="v")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def show_czsc_trader(trader: czsc.CzscTrader, max_k_num=300, **kwargs):
+    """显示缠中说禅交易员详情
+
+    :param trader: CzscTrader 对象
+    :param max_k_num: 最大显示 K 线数量
+    :param kwargs: 其他参数
+    """
+    from czsc.utils.ta import MACD
+
+    sub_title = kwargs.get("sub_title", "缠中说禅交易员详情")
+    if sub_title:
+        st.subheader(sub_title, divider="rainbow")
+
+    if not trader.freqs or not trader.kas or not trader.positions:
+        st.error("当前 trader 没有回测数据")
+        return
+
+    freqs = czsc.freqs_sorted(trader.freqs)
+    st.write(f"交易品种: {trader.symbol}")
+    tabs = st.tabs(freqs + ["策略详情"])
+
+    for freq, tab in zip(freqs, tabs[:-1]):
+
+        c = trader.kas[freq]
+        sdt = c.bars_raw[-max_k_num].dt if len(c.bars_raw) > max_k_num else c.bars_raw[0].dt
+        df = pd.DataFrame(c.bars_raw)
+        df["DIFF"], df["DEA"], df["MACD"] = MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
+
+        df = df[df["dt"] >= sdt].copy()
+        kline = czsc.KlineChart(n_rows=3, row_heights=(0.5, 0.3, 0.2), title="", width="100%", height=800)
+        kline.add_kline(df, name="")
+
+        if len(c.bi_list) > 0:
+            bi = pd.DataFrame(
+                [{"dt": x.fx_a.dt, "bi": x.fx_a.fx} for x in c.bi_list]
+                + [{"dt": c.bi_list[-1].fx_b.dt, "bi": c.bi_list[-1].fx_b.fx}]
+            )
+            fx = pd.DataFrame([{"dt": x.dt, "fx": x.fx} for x in c.fx_list])
+            fx = fx[fx["dt"] >= sdt]
+            bi = bi[bi["dt"] >= sdt]
+            kline.add_scatter_indicator(
+                fx["dt"],
+                fx["fx"],
+                name="分型",
+                row=1,
+                line_width=1.2,
+                visible=True,
+                mode="lines",
+                line_dash="dot",
+                marker_color="white",
+            )
+            kline.add_scatter_indicator(bi["dt"], bi["bi"], name="笔", row=1, line_width=1.5)
+
+        kline.add_sma(df, ma_seq=(5, 20, 60), row=1, visible=False, line_width=1)
+        kline.add_vol(df, row=2, line_width=1)
+        kline.add_macd(df, row=3, line_width=1)
+
+        # 在基础周期上绘制交易信号
+        if freq == trader.base_freq:
+            for pos in trader.positions:
+                bs_df = pd.DataFrame([x for x in pos.operates if x["dt"] >= sdt])
+                if bs_df.empty:
+                    continue
+
+                open_ops = [czsc.Operate.LO, czsc.Operate.SO]
+                bs_df["tag"] = bs_df["op"].apply(lambda x: "triangle-up" if x in open_ops else "triangle-down")
+                bs_df["color"] = bs_df["op"].apply(lambda x: "red" if x in open_ops else "white")
+
+                kline.add_scatter_indicator(
+                    bs_df["dt"],
+                    bs_df["price"],
+                    name=pos.name,
+                    text=bs_df["op_desc"],
+                    row=1,
+                    mode="markers",
+                    marker_size=15,
+                    marker_symbol=bs_df["tag"],
+                    marker_color=bs_df["color"],
+                    visible=False,
+                    hover_template="价格: %{y:.2f}<br>时间: %{x}<br>操作: %{text}<extra></extra>",
+                )
+
+        with tab:
+            config = {
+                "scrollZoom": True,
+                "displayModeBar": True,
+                "displaylogo": False,
+                "modeBarButtonsToRemove": [
+                    "toggleSpikelines",
+                    "select2d",
+                    "zoomIn2d",
+                    "zoomOut2d",
+                    "lasso2d",
+                    "autoScale2d",
+                    "hoverClosestCartesian",
+                    "hoverCompareCartesian",
+                ],
+            }
+            st.plotly_chart(kline.fig, use_container_width=True, config=config)
+
+    with tabs[-1]:
+        with st.expander("查看最新信号", expanded=False):
+            if len(trader.s):
+                s = {k: v for k, v in trader.s.items() if len(k.split("_")) == 3}
+                st.write(s)
+            else:
+                st.warning("当前没有信号配置信息")
+        for pos in trader.positions:
+            st.divider()
+            st.write(pos.name)
+            st.json(pos.dump(with_data=False))
